@@ -1,0 +1,284 @@
+ const {
+  Client,
+  GatewayIntentBits,
+  REST,
+  Routes,
+  SlashCommandBuilder,
+  PermissionFlagsBits
+} = require("discord.js");
+
+const TOKEN = process.env.DISCORD_TOKEN;
+const CLIENT_ID = process.env.CLIENT_ID;
+const GUILD_ID = process.env.GUILD_ID;
+
+if (!TOKEN || !CLIENT_ID || !GUILD_ID) {
+  console.error("Faltan variables: DISCORD_TOKEN, CLIENT_ID o GUILD_ID");
+  process.exit(1);
+}
+
+const client = new Client({
+  intents: [GatewayIntentBits.Guilds]
+});
+
+// Datos temporales
+const jugadores = new Map();
+
+let torneo = {
+  activo: false,
+  nombre: null,
+  participantes: []
+};
+
+function obtenerJugador(user) {
+  if (!jugadores.has(user.id)) {
+    jugadores.set(user.id, {
+      id: user.id,
+      nombre: user.username,
+      puntos: 0,
+      victorias: 0,
+      derrotas: 0,
+      torneos: 0
+    });
+  }
+
+  return jugadores.get(user.id);
+}
+
+const commands = [
+  new SlashCommandBuilder()
+    .setName("perfil")
+    .setDescription("Muestra tu perfil TSB"),
+
+  new SlashCommandBuilder()
+    .setName("top")
+    .setDescription("Muestra el TOP de jugadores"),
+
+  new SlashCommandBuilder()
+    .setName("ranking")
+    .setDescription("Muestra el ranking TSB"),
+
+  new SlashCommandBuilder()
+    .setName("victoria")
+    .setDescription("Registra una victoria")
+    .addUserOption(option =>
+      option
+        .setName("jugador")
+        .setDescription("Jugador que ganó")
+        .setRequired(true)
+    ),
+
+  new SlashCommandBuilder()
+    .setName("torneo")
+    .setDescription("Sistema de torneos TSB")
+    .addSubcommand(sub =>
+      sub
+        .setName("crear")
+        .setDescription("Crea un torneo")
+        .addStringOption(option =>
+          option
+            .setName("nombre")
+            .setDescription("Nombre del torneo")
+            .setRequired(true)
+        )
+    )
+    .addSubcommand(sub =>
+      sub
+        .setName("unirse")
+        .setDescription("Únete al torneo actual")
+    )
+    .addSubcommand(sub =>
+      sub
+        .setName("lista")
+        .setDescription("Muestra los participantes")
+    )
+    .addSubcommand(sub =>
+      sub
+        .setName("cerrar")
+        .setDescription("Cierra el torneo")
+    )
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
+];
+
+const rest = new REST({ version: "10" }).setToken(TOKEN);
+
+async function registrarComandos() {
+  try {
+    console.log("Registrando comandos...");
+
+    await rest.put(
+      Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID),
+      {
+        body: commands.map(command => command.toJSON())
+      }
+    );
+
+    console.log("Comandos registrados correctamente.");
+  } catch (error) {
+    console.error(error);
+  }
+}
+
+client.once("ready", async () => {
+  console.log(`TSB conectado como ${client.user.tag}`);
+  await registrarComandos();
+});
+
+client.on("interactionCreate", async interaction => {
+  if (!interaction.isChatInputCommand()) return;
+
+  const comando = interaction.commandName;
+
+  // PERFIL
+  if (comando === "perfil") {
+    const jugador = obtenerJugador(interaction.user);
+
+    return interaction.reply(
+      `👤 **Perfil TSB — ${jugador.nombre}**\n\n` +
+      `🏆 Puntos: **${jugador.puntos}**\n` +
+      `⚔️ Victorias: **${jugador.victorias}**\n` +
+      `💀 Derrotas: **${jugador.derrotas}**\n` +
+      `🏆 Torneos: **${jugador.torneos}**`
+    );
+  }
+
+  // TOP
+  if (comando === "top") {
+    const lista = [...jugadores.values()]
+      .sort((a, b) => b.puntos - a.puntos)
+      .slice(0, 10);
+
+    if (lista.length === 0) {
+      return interaction.reply("📊 Todavía no hay jugadores en el TOP.");
+    }
+
+    const texto = lista
+      .map((jugador, index) =>
+        `**${index + 1}.** ${jugador.nombre} — 🏆 ${jugador.puntos} puntos`
+      )
+      .join("\n");
+
+    return interaction.reply(
+      `👑 **TOP 10 TSB**\n\n${texto}`
+    );
+  }
+
+  // RANKING
+  if (comando === "ranking") {
+    const lista = [...jugadores.values()]
+      .sort((a, b) => b.puntos - a.puntos);
+
+    if (lista.length === 0) {
+      return interaction.reply("📊 El ranking todavía está vacío.");
+    }
+
+    const texto = lista
+      .slice(0, 20)
+      .map((jugador, index) =>
+        `**${index + 1}.** ${jugador.nombre} — ${jugador.puntos} pts`
+      )
+      .join("\n");
+
+    return interaction.reply(
+      `🥇 **RANKING TSB**\n\n${texto}`
+    );
+  }
+
+  // VICTORIA
+  if (comando === "victoria") {
+    const usuario = interaction.options.getUser("jugador");
+
+    const jugador = obtenerJugador(usuario);
+
+    jugador.victorias += 1;
+    jugador.puntos += 3;
+
+    return interaction.reply(
+      `🏆 **Victoria registrada**\n\n` +
+      `${usuario} recibió **+3 puntos**.\n` +
+      `🏆 Puntos actuales: **${jugador.puntos}**`
+    );
+  }
+
+  // TORNEOS
+  if (comando === "torneo") {
+    const subcomando = interaction.options.getSubcommand();
+
+    if (subcomando === "crear") {
+      if (torneo.activo) {
+        return interaction.reply("⚠️ Ya hay un torneo activo.");
+      }
+
+      const nombre = interaction.options.getString("nombre");
+
+      torneo = {
+        activo: true,
+        nombre,
+        participantes: []
+      };
+
+      return interaction.reply(
+        `🏆 **TORNEO CREADO**\n\n` +
+        `⚔️ Nombre: **${nombre}**\n\n` +
+        `Los jugadores pueden usar **/torneo unirse** para participar.`
+      );
+    }
+
+    if (subcomando === "unirse") {
+      if (!torneo.activo) {
+        return interaction.reply("❌ No hay ningún torneo activo.");
+      }
+
+      if (torneo.participantes.includes(interaction.user.id)) {
+        return interaction.reply("⚠️ Ya estás inscrito en el torneo.");
+      }
+
+      torneo.participantes.push(interaction.user.id);
+
+      return interaction.reply(
+        `✅ ${interaction.user} se ha unido al torneo **${torneo.nombre}**.\n` +
+        `👥 Participantes: **${torneo.participantes.length}**`
+      );
+    }
+
+    if (subcomando === "lista") {
+      if (!torneo.activo) {
+        return interaction.reply("❌ No hay ningún torneo activo.");
+      }
+
+      if (torneo.participantes.length === 0) {
+        return interaction.reply("👥 Todavía no hay participantes.");
+      }
+
+      const lista = torneo.participantes
+        .map((id, index) => `**${index + 1}.** <@${id}>`)
+        .join("\n");
+
+      return interaction.reply(
+        `👥 **PARTICIPANTES — ${torneo.nombre}**\n\n${lista}`
+      );
+    }
+
+    if (subcomando === "cerrar") {
+      if (!torneo.activo) {
+        return interaction.reply("❌ No hay ningún torneo activo.");
+      }
+
+      const nombre = torneo.nombre;
+      const cantidad = torneo.participantes.length;
+
+      torneo = {
+        activo: false,
+        nombre: null,
+        participantes: []
+      };
+
+      return interaction.reply(
+        `🏁 **TORNEO CERRADO**\n\n` +
+        `🏆 ${nombre}\n` +
+        `👥 Participantes: **${cantidad}**`
+      );
+    }
+  }
+});
+
+client.login(TOKEN);
